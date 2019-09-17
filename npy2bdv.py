@@ -56,6 +56,8 @@ class BdvWriter:
         self.subsamp = np.asarray(subsamp)
         self.chunks = self.compute_chunk_size(blockdim)
         self.stack_shape = None
+        self.affine_matrices = {}
+        self.affine_names = {}
         self.compression = compression
         self.filename = filename
         self.file_object = h5py.File(filename, 'a')
@@ -71,7 +73,7 @@ class BdvWriter:
             grp.create_dataset('resolutions', data=data_subsamp, dtype='<f8')
             grp.create_dataset('subdivisions', data=data_chunks, dtype='<i4')
 
-    def append_view(self, stack, time, illumination=0, channel=0, tile=0, angle=0):
+    def append_view(self, stack, time, illumination=0, channel=0, tile=0, angle=0, m_affine=None, affine_name=None):
         """Write numpy 3-dimensional array (stack) to h5 file at specified timepint (itime) and setup number (isetup).
         Parameters:
             stack: 3d numpy array in (z,y,x) order, type 'uint16'.
@@ -83,12 +85,17 @@ class BdvWriter:
         fmt = 't{:05d}/s{:02d}/{}'
         nlevels = len(self.subsamp)
         isetup = self.determine_setup_id(illumination, channel, tile, angle)
+        print(f"appending view with setup id {isetup}")
         for ilevel in range(nlevels):
             grp = self.file_object.create_group(fmt.format(time, isetup, ilevel))
             subdata = self.subsample_stack(stack, self.subsamp[ilevel])
             grp.create_dataset('cells', data=subdata, chunks=self.chunks[ilevel],
                                maxshape=(None, None, None), compression=self.compression)
-
+        if m_affine is not None:
+            self.affine_matrices[isetup] = m_affine
+        if affine_name is not None:
+            self.affine_names[isetup] = affine_name 
+   
     def compute_chunk_size(self, blockdim):
         """Populate the size of h5 chunks.
         Use first-level chunk size if there are more subsampling levels than chunk size levels.
@@ -242,12 +249,16 @@ class BdvWriter:
                 vreg.set('timepoint', str(itime))
                 vreg.set('setup', str(iset))
                 # write arbitrary affine transformation
-                if m_affine is not None:
+                if iset in self.affine_matrices.keys():
                     vt = ET.SubElement(vreg, 'ViewTransform')
                     vt.set('type', 'affine')
+                    if iset in self.affine_names.keys():
+                        name_affine=self.affine_names[iset]
+                    else:
+                        name_affine="Affine"
                     ET.SubElement(vt, 'Name').text = name_affine
                     n_prec = 6
-                    mx_string = np.array2string(m_affine.flatten(), separator=' ',
+                    mx_string = np.array2string(self.affine_matrices[iset].flatten(), separator=' ',
                                                 precision=n_prec, floatmode='fixed',
                                                 max_line_width=(n_prec+5)*4)
                     ET.SubElement(vt, 'affine').text = mx_string[1:-1].strip()
